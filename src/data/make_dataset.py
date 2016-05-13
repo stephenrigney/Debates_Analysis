@@ -1,12 +1,7 @@
 # -*- coding: utf-8 -*-
-import os
-import click
-import logging
-import spacy
-import re
-from lxml import etree
+import os, click, logging, spacy, re, gzip
 from zipfile import ZipFile
-from bz2 import BZ2File
+from lxml import etree
 from dotenv import find_dotenv, load_dotenv
 from datetime import datetime
 from collections import defaultdict
@@ -14,13 +9,14 @@ from collections import defaultdict
 NS = {"akn": "http://docs.oasis-open.org/legaldocml/ns/akn/3.0/CSD13"}
 
 class SpacyPipeline:
-    def __init__(self, input_filepath, start_year, end_year):
+    def __init__(self, input_filepath, start_year, end_year, token_type="para"):
         self.nlp = spacy.load("en")
         self.input_filepath = input_filepath
         self.start_year = start_year
         self.end_year = end_year
         self.z = ZipFile(self.input_filepath)
         self.sittings = self.sittings()
+        self.format = token_type
 
 
     def sittings(self):
@@ -32,19 +28,29 @@ class SpacyPipeline:
                     sittings[sitting_year].append(fn.filename)
         return sittings
 
+    def iter_sentences(self, toks, i):
+        sentences = [["{}_{}".format(tok.lemma_, tok.pos_) for tok in sent
+                    if tok.is_alpha and not tok.is_stop and tok.pos_ in ["ADV", "ADJ", "VERB", "PROPN   ", "NOUN"]]
+                    for sent in toks.sents]
+        for sentence in sentences:
+            yield str(i)+": "+" ".join(sentence)+"\n"
+
+    def iter_paragraphs(self, toks, i):
+        paragraph = ["{}_{}".format(tok.lemma_, tok.pos_) for tok in toks
+                    if tok.is_alpha and not tok.is_stop and tok.pos_ in ["ADV", "ADJ", "VERB", "PROPN   ", "NOUN"]]
+        return str(i)+": "+" ".join(paragraph)+"\n"
+
     def __iter__(self):
         for year in sorted(self.sittings):
             yield "!!open " + year
             #indexing sentences by paragraph - will have to return to this and assign uris. hmm....
             for i, toks in enumerate(self.nlp.pipe(self.extract_paragraphs(year), batch_size=100, n_threads=6)):
                 #sentences = [[t.lemma_ for t in s if t.is_alpha and not t.is_stop] for s in toks.sents]
-
-                sentences = [["{}_{}".format(tok.lemma_, tok.tag_) for tok in sent
-                            if tok.is_alpha and not tok.is_stop and tok.tag_[0] in ("V", "N")]
-                            for sent in toks.sents]
-                for sentence in sentences:
-
-                    yield str(i)+": "+" ".join(sentence)+"\n"
+                if self.format == "sent":
+                    for sent in (self.iter_sentences(toks, i)):
+                        yield sent
+                else:
+                    yield self.iter_paragraphs(toks, i)
             yield "!!close " + year
 
     def paragraph_uris(self):
@@ -53,7 +59,7 @@ class SpacyPipeline:
             for sitting in self.sittings[year]:
                 root = etree.fromstring(self.z.open(sitting).read())
                 date = root.find(".//{*}FRBRWork/{*}FRBRdate").attrib['date']
-                paragraphs.extend("tagged/dail/{}/{}".format(date, p.attrib['eId']) for p in root.findall(".//{*}speech/{*}p"))
+                paragraphs.extend("/dail/{}/{}".format(date, p.attrib['eId']) for p in root.findall(".//{*}speech/{*}p"))
 
         uris = {str(i):uri for i, uri in enumerate(paragraphs)}
         return uris
@@ -72,7 +78,7 @@ class SpacyPipeline:
             for para in paragraphs:
                 logging.debug("Date: {}, eId: {}".format(date, para.attrib['eId']))
                 #get over attribute error for 6 dots.
-                text = " ".join(para.xpath(".//text()")).replace("..", " ")
+                text = " ".join(para.xpath(".//text()"))
                 yield text
             if i % 20 == 0:
                 logging.info("Written {} paragraphs from {} sittings in {}".format(cumulative_para_count, i, year))
@@ -85,7 +91,7 @@ class SpacyPipeline:
 @click.argument('output_dirpath', default = "../../data/processed", type=click.Path(exists=True))
 #@click.argument('nlp', default = None)
 def main(input_filepath, output_dirpath, start_year, end_year):
-    method = "tagged-lemmas"
+    method = "pos-lemmas-para"
 
     logger = logging.getLogger(__name__)
     logger.info('making tagged data set from raw data')
@@ -94,19 +100,20 @@ def main(input_filepath, output_dirpath, start_year, end_year):
     logging.info("Indexed {} paragraphs".format(len(uris)))
     logging.info("Prepared spaCy pipeline")
     directory = "{}/{}_{}-{}".format(output_dirpath, method, start_year, end_year)
-    if not os.path.exists(output_dirpath):
-        os.makedirs(output_dirpath)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
     for sentence in pipe:
         if sentence.startswith("!!open"):
             fn = "{}_{}.txt".format(method, sentence.split()[-1])
-            f = open(os.path.join(output_dirpath, fn), "w")
+            f = open(os.path.join(directory, fn), "w")
             logging.info("Writing file for {}".format(fn))
         elif sentence.startswith("!!close"):
             f.close()
             logging.info("Closed file for {}".format(sentence.split()[-1]))
         else:
-            sentence = uris[sentence[0]]+sentence[1:]
+            sentence = method + uris[sentence[0]] + sentence[1:]
             f.write((sentence))
+    gzip.compress(directory)
     logging.info("Finished")
 
 
