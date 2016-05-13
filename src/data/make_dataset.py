@@ -9,6 +9,7 @@ from zipfile import ZipFile
 from bz2 import BZ2File
 from dotenv import find_dotenv, load_dotenv
 from datetime import datetime
+from collections import defaultdict
 
 NS = {"akn": "http://docs.oasis-open.org/legaldocml/ns/akn/3.0/CSD13"}
 
@@ -23,44 +24,46 @@ class SpacyPipeline:
 
 
     def sittings(self):
-        sittings = [fn for fn in self.z.filelist
-                     if fn.filename.startswith("dail/AK-dail")
-                     and self.start_year <= int(re.search("dail-(\d{4})-\d{2}-\d{2}.xml", fn.filename).group(1)) <=self.end_year]
+        sittings = defaultdict(list)
+        for fn in self.z.filelist:
+            if fn.filename.startswith("dail/AK-dail"):
+                sitting_year = re.search("dail-(\d{4})-\d{2}-\d{2}.xml", fn.filename).group(1)
+                if self.start_year <= int(sitting_year) <= self.end_year:
+                    sittings[sitting_year].append(fn.filename)
         return sittings
 
     def __iter__(self):
-        #indexing sentences by paragraph - will have to return to this and assign uris. hmm....
+        for year in sorted(self.sittings):
+            yield "!!open " + year
+            #indexing sentences by paragraph - will have to return to this and assign uris. hmm....
+            for i, toks in enumerate(self.nlp.pipe(self.extract_paragraphs(year), batch_size=100, n_threads=6)):
+                #sentences = [[t.lemma_ for t in s if t.is_alpha and not t.is_stop] for s in toks.sents]
 
-        for i, toks in enumerate(self.nlp.pipe(self.extract_paragraphs(), batch_size=100, n_threads=6)):
-            #sentences = [[t.lemma_ for t in s if t.is_alpha and not t.is_stop] for s in toks.sents]
+                sentences = [["{}_{}".format(tok.lemma_, tok.tag_) for tok in sent
+                            if tok.is_alpha and not tok.is_stop and tok.tag_[0] in ("V", "N")]
+                            for sent in toks.sents]
+                for sentence in sentences:
 
-            sentences = [["{}_{}".format(tok.lemma_, tok.tag_) for tok in sent
-                        if tok.is_alpha and not tok.is_stop and tok.tag_[0] in ("V", "N")]
-                        for sent in toks.sents]
-            for sentence in sentences:
-
-                yield str(i)+": "+" ".join(sentence)+"\n"
-
+                    yield str(i)+": "+" ".join(sentence)+"\n"
+            yield "!!close " + year
 
     def paragraph_uris(self):
         paragraphs = []
-        for sitting in self.sittings:
-            root = etree.fromstring(self.z.open(sitting).read())
-            date = root.find(".//{*}FRBRWork/{*}FRBRdate").attrib['date']
-            paragraphs.extend("tagged/dail/{}/{}".format(date, p.attrib['eId']) for p in root.findall(".//{*}speech/{*}p"))
+        for year in self.sittings:
+            for sitting in self.sittings[year]:
+                root = etree.fromstring(self.z.open(sitting).read())
+                date = root.find(".//{*}FRBRWork/{*}FRBRdate").attrib['date']
+                paragraphs.extend("tagged/dail/{}/{}".format(date, p.attrib['eId']) for p in root.findall(".//{*}speech/{*}p"))
 
         uris = {str(i):uri for i, uri in enumerate(paragraphs)}
         return uris
 
-    def extract_paragraphs(self):
+    def extract_paragraphs(self, year):
         '''Input is zipped Akoma Ntoso XML of type debateRecord.
-        Output is a compressed (BZ2) file for each period from start year to end year
-        if interval is not set, the period is start_year to end_year-1
-        For now, text is written as lemmas - swap out/ expand nlp section as need be
         '''
         cumulative_para_count = 0
-        logging.info("Reading data for {} sittings between {} and {}".format(len(self.sittings), self.start_year, self.end_year))
-        for i, sitting in enumerate(self.sittings):
+        logging.info("Year: {}, No. sittings: {}".format(year, len(self.sittings[year])))
+        for i, sitting in enumerate(self.sittings[year]):
             root = etree.fromstring(self.z.open(sitting).read())
             date = root.find(".//{*}FRBRWork/{*}FRBRdate").attrib['date']
             paragraphs = root.findall(".//{*}speech/{*}p")
@@ -72,7 +75,7 @@ class SpacyPipeline:
                 text = " ".join(para.xpath(".//text()")).replace("..", " ")
                 yield text
             if i % 20 == 0:
-                logging.info("Written {} paragraphs from {} sittings".format(cumulative_para_count, i))
+                logging.info("Written {} paragraphs from {} sittings in {}".format(cumulative_para_count, i, year))
 
 
 @click.command()
@@ -81,26 +84,35 @@ class SpacyPipeline:
 @click.argument('input_filepath', default = "../../data/external/AKN_dail.zip", type=click.Path(exists=True))
 @click.argument('output_dirpath', default = "../../data/processed", type=click.Path(exists=True))
 #@click.argument('nlp', default = None)
-def main(start_year, end_year, input_filepath, output_dirpath):
+def main(input_filepath, output_dirpath, start_year, end_year):
+    method = "tagged-lemmas"
+
     logger = logging.getLogger(__name__)
     logger.info('making tagged data set from raw data')
     pipe = SpacyPipeline(input_filepath, start_year, end_year)
     uris = pipe.paragraph_uris()
     logging.info("Indexed {} paragraphs".format(len(uris)))
     logging.info("Prepared spaCy pipeline")
-    bz_file = "{}/tagged_{}_{}.bz2".format(output_dirpath, start_year, end_year)
-    with BZ2File(bz_file, "w") as bz:
-        logging.info("Opening {}".format(bz_file))
-        for sentence in pipe:
+    directory = "{}/{}_{}-{}".format(output_dirpath, method, start_year, end_year)
+    if not os.path.exists(output_dirpath):
+        os.makedirs(output_dirpath)
+    for sentence in pipe:
+        if sentence.startswith("!!open"):
+            fn = "{}_{}.txt".format(method, sentence.split()[-1])
+            f = open(os.path.join(output_dirpath, fn), "w")
+            logging.info("Writing file for {}".format(fn))
+        elif sentence.startswith("!!close"):
+            f.close()
+            logging.info("Closed file for {}".format(sentence.split()[-1]))
+        else:
             sentence = uris[sentence[0]]+sentence[1:]
-            bz.write((sentence).encode("utf-8"))
-        logging.info("Closing {}".format(bz_file))
+            f.write((sentence))
     logging.info("Finished")
 
 
 if __name__ == '__main__':
     now = datetime.now()
-    logfile = "logs/tagging_{}.log".format(str(now).split(":")[0].replace(" ", "-"))
+    logfile = "logs/make-dataset_{}.log".format(now.strftime("%Y-%m-%dT%H-%M"))
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(filename=logfile, level=logging.INFO, format=log_fmt)
 
