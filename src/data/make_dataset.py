@@ -6,11 +6,12 @@ from dotenv import find_dotenv, load_dotenv
 
 
 @click.command()
-@click.argument('input_filepath', type=click.Path(exists=True))
-@click.argument('output_filepath', type=click.Path())
+@click.argument('input_filepath', default="../../data/external", type=click.Path(exists=True))
+@click.argument('output_filepath', default=".", type=click.Path())
 def main(input_filepath, output_filepath):
     logger = logging.getLogger(__name__)
     logger.info('making final data set from raw data')
+    
 
 
 if __name__ == '__main__':
@@ -19,10 +20,9 @@ if __name__ == '__main__':
 
     # not used in this stub but often useful for finding various files
     project_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-    
+
     # find .env automagically by walking up directories until it's found, then
     # load up the .env entries as environment variables
     load_dotenv(find_dotenv())
 
     main()
-
