@@ -3,16 +3,12 @@ import os
 import click
 import logging
 import spacy
-import re
-from zipfile import ZipFile
-from lxml import etree
+import tarfile
+import multiprocessing
 from dotenv import find_dotenv, load_dotenv
 from datetime import datetime
 from collections import defaultdict
-from polyglot.text import Text as Poly
-from nltk.corpus import stopwords
 
-NS = {"akn": "http://docs.oasis-open.org/legaldocml/ns/akn/3.0/CSD13"}
 
 
 class TextPipeline:
@@ -21,74 +17,31 @@ class TextPipeline:
             start_year, end_year,
             token_type="para"):
         self.format = token_type
-        if self.format.startswith("spacy"):
-            self.nlp = spacy.load("en")
-        else:
-            self.stopwords = set(stopwords.words("english"))
+        self.nlp = spacy.load("en")
         self.input_filepath = input_filepath
         self.start_year = start_year
         self.end_year = end_year
-        self.z = ZipFile(self.input_filepath)
-        self.sittings = self.sittings()
 
         self.uris = []
 
     def __iter__(self):
-        for year in sorted(self.sittings):
-            yield "!!open " + year
-            if self.format.startswith("spacy"):
-                pipe = self.spacy_pipeline(year)
-
-            else:
-                pipe =self.polyglot_pipeline(year)
+        for year in range(self.start_year, self.end_year+1):
+            yield "!!open " + str(year)
+            pipe = self.spacy_pipeline(year)
             for line in pipe:
                 yield line
-            yield "!!close " + year
-
-    def polyglot_pipeline(self, year):
-        for i, para in enumerate(self.extract_paragraphs(year)):
-            if len(para)> 0:
-                poly = ".".join([" ".join(["{}/{}".format(w[0].lower(), w[1]) for w in s.pos_tags
-                     if w[0] not in self.stopwords and
-                     w[0].isalpha() and
-                     w[1] in ["ADV", "ADJ", "VERB", "PROPN", "NOUN"]])
-                     for s in Poly(para).sentences if s.language.code=="en"])
-                logging.debug(poly)
-                if len(poly) > 3:
-                    yield self.uris[i] + ": " + poly + "\n"
-
-    def polyglot_pipeline(self, year):
-        for i, para in enumerate(self.extract_paragraphs(year)):
-            if len(para)> 0:
-                poly = ".".join([" ".join(["{}/{}".format(w[0].lower(), w[1]) for w in s.pos_tags
-                     if w[0] not in self.stopwords and
-                     w[0].isalpha() and
-                     w[1] in ["ADV", "ADJ", "VERB", "PROPN", "NOUN"]])
-                     for s in Poly(para).sentences if s.language.code=="en"])
-                logging.debug(poly)
-                if len(poly) > 3:
-                    yield self.uris[i] + ": " + poly + "\n"
+            yield "!!close " + str(year)
 
     def spacy_pipeline(self, year):
         for i, toks in enumerate(
                 self.nlp.pipe(self.extract_paragraphs(year),
-                        batch_size=100, n_threads=6)):
-            #sentences = [[t.lemma_ for t in s if t.is_alpha and not t.is_stop] for s in toks.sents]
-            if self.format == "spacy-sent":
+                        batch_size=200, n_threads=cores)):
+            if self.format == "sent":
                 for sent in (self.iter_sentences(toks, i)):
                     yield sent
             else:
                 yield self.iter_paragraphs(toks, i)
 
-    def sittings(self):
-        sittings = defaultdict(list)
-        for fn in self.z.filelist:
-            if fn.filename.startswith("dail/AK-dail"):
-                sitting_year = re.search("dail-(\d{4})-\d{2}-\d{2}.xml",
-                                    fn.filename).group(1)
-                if self.start_year <= int(sitting_year) <= self.end_year:
-                    sittings[sitting_year].append(fn.filename)
-        return sittings
 
     def iter_sentences(self, toks, i):
         sentences = [["{}/{}".format(tok.lemma_, tok.pos_) for tok in sent
@@ -100,44 +53,38 @@ class TextPipeline:
             yield str(i)+": "+" ".join(sentence)+"\n"
 
     def iter_paragraphs(self, toks, i):
-        paragraph = ["{}_{}".format(tok.lemma_, tok.pos_) for tok in toks
+        paragraph = ["{}/{}".format(tok.lemma_, tok.pos_) for tok in toks
                 if tok.is_alpha and not
                 tok.is_stop and
                 tok.pos_ in ["ADV", "ADJ", "VERB", "PROPN", "NOUN"]]
         return self.uris[i] + ": " + " ".join(paragraph)+"\n"
 
     def extract_paragraphs(self, year):
-        '''Input is zipped Akoma Ntoso XML of type debateRecord.
-        '''
-        cumulative_para_count = 0
         self.uris = []
-        logging.info("Year: {}, No. sittings: {}".format(year, len(self.sittings[year])))
-        for i, sitting in enumerate(self.sittings[year]):
-            logging.debug(sitting)
-            root = etree.fromstring(self.z.open(sitting).read())
-            date = root.find(".//{*}FRBRWork/{*}FRBRdate").attrib['date']
-            paragraphs = root.findall(".//{*}speech/{*}p")
-            l = len(paragraphs)
-            cumulative_para_count += l
-            for para in paragraphs:
-                uri = "{}/{}".format(date, para.attrib['eId'].replace("para_", ""))
-                self.uris.append(uri)
-                logging.debug("Date: {}, eId: {}".format(date, para.attrib['eId']))
-                text = " ".join(para.xpath(".//text()"))
-                yield text
-            if i % 20 == 0:
-                logging.info("Wrote {} paragraphs from {} sittings in {}".format(cumulative_para_count, i, year))
-        logging.info(logging.info("Finished with {}: Wrote {} paragraphs from {} sittings".format(year, cumulative_para_count, i)))
+        i = []
+        logging.info("Year: {}".format(year))
+        with tarfile.open(self.input_filepath, encoding="utf-8") as tf:
+            filenames = [fn for fn in tf if str(year) in fn.name]
+            for fn in filenames:
+                fileobj = tf.extractfile(fn)
+                for i, line in enumerate(fileobj):
+                    uri_text = line.decode("utf-8").split(": ")
+                    self.uris.append(uri_text[0])
+                    yield uri_text[1]
+                    if i % 500 == 0:
+                        logging.info("Wrote {}, of {} paragraphs for {}".format(uri_text[0], i, year))
+        logging.info(logging.info("Finished with {}: Wrote {} paragraphs".format(year, i)))
+
 
 
 @click.command()
 @click.argument('start_year', default = 2015)
 @click.argument('end_year', default = 2016)
-@click.argument('input_filepath', default = "../../data/external/AKN_dail.zip", type=click.Path(exists=True))
+@click.argument('input_filepath', default = "../../data/interim/english-dail_1922-2015.tar.gz", type=click.Path(exists=True))
 @click.argument('output_dirpath', default = "../../data/processed", type=click.Path(exists=True))
 #@click.argument('nlp', default = None)
 def main(input_filepath, output_dirpath, start_year, end_year):
-    method = "poly-pos-para"
+    method = "spacy-para-lemma-tag"
     logger = logging.getLogger(__name__)
     logger.info('making tagged data set from raw data')
     pipe = TextPipeline(input_filepath, start_year, end_year)
@@ -165,6 +112,7 @@ if __name__ == '__main__':
     logfile = "logs/make-dataset_{}.log".format(now.strftime("%Y-%m-%dT%H-%M"))
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(filename=logfile, level=logging.INFO, format=log_fmt)
+    cores = multiprocessing.cpu_count()
 
     # not used in this stub but often useful for finding various files
     project_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
