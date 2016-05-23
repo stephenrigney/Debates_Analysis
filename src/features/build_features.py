@@ -47,7 +47,18 @@ class TextPipeline:
 
     def polyglot_pipeline(self, year):
         for i, para in enumerate(self.extract_paragraphs(year)):
-            para = para.replace("co-op", "coop")
+            if len(para)> 0:
+                poly = ".".join([" ".join(["{}/{}".format(w[0].lower(), w[1]) for w in s.pos_tags
+                     if w[0] not in self.stopwords and
+                     w[0].isalpha() and
+                     w[1] in ["ADV", "ADJ", "VERB", "PROPN", "NOUN"]])
+                     for s in Poly(para).sentences if s.language.code=="en"])
+                logging.debug(poly)
+                if len(poly) > 3:
+                    yield self.uris[i] + ": " + poly + "\n"
+
+    def polyglot_pipeline(self, year):
+        for i, para in enumerate(self.extract_paragraphs(year)):
             if len(para)> 0:
                 poly = ".".join([" ".join(["{}/{}".format(w[0].lower(), w[1]) for w in s.pos_tags
                      if w[0] not in self.stopwords and
@@ -120,7 +131,7 @@ class TextPipeline:
 
 
 @click.command()
-@click.argument('start_year', default = 1922)
+@click.argument('start_year', default = 2015)
 @click.argument('end_year', default = 2016)
 @click.argument('input_filepath', default = "../../data/external/AKN_dail.zip", type=click.Path(exists=True))
 @click.argument('output_dirpath', default = "../../data/processed", type=click.Path(exists=True))

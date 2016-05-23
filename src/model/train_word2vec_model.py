@@ -39,7 +39,7 @@ class ExtractLines:
 @click.argument('end_year', default = 2020)
 @click.argument('interval', default=20)
 @click.argument('model', default="word2vec")
-@click.argument('input_filepath', default="../../data/processed/pos-lemmas-para_1922-2016.tar.gz", type=click.Path(exists=True))
+@click.argument('input_filepath', default="../../data/processed/poly-pos-para_1922-2016.tar.gz", type=click.Path(exists=True))
 @click.argument('output_filepath', default="../../models/word2vec", type=click.Path())
 def main(input_filepath, output_filepath, start_year, end_year, interval, model):
     logger = logging.getLogger(__name__)
@@ -56,7 +56,8 @@ def main(input_filepath, output_filepath, start_year, end_year, interval, model)
         else:
             m = Doc2Vec(lines, workers=cores)
             suffix = "d2v"
-        filename = "pos-lemmas-para_{}-{}.{}".format(decade, decade+interval-1, suffix)
+        fn = input_filepath.split("/")[-1].split(".")[0]
+        filename = "{}_{}-{}.{}".format(fn, decade, decade+interval-1, suffix)
         m.save(os.path.join(output_filepath, filename))
         logging.info("Saved: {}".format(filename))
     logging.info("Finished")

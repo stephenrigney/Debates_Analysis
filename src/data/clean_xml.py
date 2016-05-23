@@ -4,7 +4,7 @@ import click
 import logging
 from zipfile import ZipFile
 
-    
+
 dblquotes = re.compile("\x93|\x94")
 sglquotes = re.compile("\x91|\x92")
 space = re.compile("\x97|\x95")
@@ -23,7 +23,7 @@ for fn in z.filelist:
         xml = dblquotes.sub('"', xml)
         xml = sglquotes.sub("'", xml)
         xml = space.sub(" ", xml)
-        xml = xml.replace("\x9c", "oe").replace("\x8a", "Š").replace("\x8a", "Š".lower())
+        xml = xml.replace("\x9c", "oe").replace("\x8a", "Š").replace("\x9a", "Š".lower())
         xml = dash.sub("-", xml)
         xml = nochar.sub("", xml)
         with open("../../data/external/"+fn.filename, "wb") as f:
