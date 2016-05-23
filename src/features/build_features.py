@@ -71,15 +71,15 @@ class TextPipeline:
                     uri_text = line.decode("utf-8").split(": ")
                     self.uris.append(uri_text[0])
                     yield uri_text[1]
-                    if i % 500 == 0:
+                    if i % 2000 == 0:
                         logging.info("Wrote {}, of {} paragraphs for {}".format(uri_text[0], i, year))
         logging.info(logging.info("Finished with {}: Wrote {} paragraphs".format(year, i)))
 
 
 
 @click.command()
-@click.argument('start_year', default = 2015)
-@click.argument('end_year', default = 2016)
+@click.argument('start_year', default = 1923)
+@click.argument('end_year', default = 2015)
 @click.argument('input_filepath', default = "../../data/interim/english-dail_1922-2015.tar.gz", type=click.Path(exists=True))
 @click.argument('output_dirpath', default = "../../data/processed", type=click.Path(exists=True))
 #@click.argument('nlp', default = None)

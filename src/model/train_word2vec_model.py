@@ -36,8 +36,8 @@ class ExtractLines:
 
 @click.command()
 @click.argument('start_year', default = 1920)
-@click.argument('end_year', default = 2020)
-@click.argument('interval', default=20)
+@click.argument('end_year', default = 2001)
+@click.argument('interval', default=5)
 @click.argument('model', default="word2vec")
 @click.argument('input_filepath', default="../../data/processed/poly-pos-para_1922-2016.tar.gz", type=click.Path(exists=True))
 @click.argument('output_filepath', default="../../models/word2vec", type=click.Path())
@@ -48,18 +48,15 @@ def main(input_filepath, output_filepath, start_year, end_year, interval, model)
         os.makedirs(output_filepath)
     logging.info("Start year: {}, End year: {}, Interval: {} years".format(start_year, end_year, interval))
     for decade in range(start_year, end_year, interval):
-        logging.info("Training model for period from {} to {}".format(decade, decade+interval-1))
-        lines = ExtractLines(input_filepath, decade, decade+interval, model)
-        if model=="word2vec":
-            m = Word2Vec(lines, workers=cores)
-            suffix = "w2v"
-        else:
-            m = Doc2Vec(lines, workers=cores)
-            suffix = "d2v"
-        fn = input_filepath.split("/")[-1].split(".")[0]
-        filename = "{}_{}-{}.{}".format(fn, decade, decade+interval-1, suffix)
-        m.save(os.path.join(output_filepath, filename))
-        logging.info("Saved: {}".format(filename))
+        logging.info("Training model for period from {} to {}".format(decade, decade+19))
+        lines = ExtractLines(input_filepath, decade, decade+19, model)
+        for model in [(Word2Vec, "word"), (Doc2Vec, "doc")]:
+            m = model[0](lines, workers=cores)
+            name = model[1]
+            fn = input_filepath.split("/")[-1].split(".")[0]
+            filename = "{}-spacy-pos-lemma_{}-{}.{}2v".format(name, fn, decade, decade+19, name[1])
+            m.save(os.path.join(output_filepath, filename))
+            logging.info("Saved: {}".format(filename))
     logging.info("Finished")
 
 
